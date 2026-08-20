@@ -38,12 +38,16 @@ class AutoHealer:
         return self._browser
 
     async def close(self):
-        for closer in (self._browser, self._playwright):
-            if closer is not None:
-                try:
-                    await closer.close()
-                except Exception:
-                    logger.exception("Error closing healer resources")
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception:
+                logger.exception("Error closing healer browser")
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                logger.exception("Error stopping healer driver")
         self._browser = None
         self._playwright = None
 

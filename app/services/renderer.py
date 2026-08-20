@@ -82,12 +82,16 @@ class PageRenderer:
 
     async def close(self):
         """Close the browser and playwright driver (call in teardown)."""
-        for closer in (self._browser, self._playwright):
-            if closer is not None:
-                try:
-                    await closer.close()
-                except Exception:
-                    logger.exception("Error closing renderer resources")
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception:
+                logger.exception("Error closing renderer browser")
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                logger.exception("Error stopping renderer driver")
         self._browser = None
         self._playwright = None
 
