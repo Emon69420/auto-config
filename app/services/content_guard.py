@@ -165,13 +165,20 @@ def prune_elements(
 ) -> dict:
     """Content-guard a selector list across rendered pages.
 
-    Returns {"kept": [...], "dropped": [{"selector","reason","safe"}], "counts": {...}}.
+    Returns {"kept": [...], "dropped": [{"selector","reason","kept?"}], "counts": {...}}.
+    A narrowing entry carries the surviving exact matches under "kept"; entries
+    already reflect the final state after the integrity pass, so a selector is
+    never listed as kept and then separately dropped.
     """
     min_text = min_text or _MIN_TEXT
     samples = [h for h in htmls if h]
 
     kept: list[str] = []
     dropped: list[dict] = []
+    # sel -> the broad selector that produced it (provenance for reconciliation)
+    narrow_source: dict[str, str] = {}
+    # broad selectors that got narrowed and need their report finalized later
+    narrowed: list[str] = []
 
     for raw in elements:
         if not isinstance(raw, str):
@@ -196,40 +203,71 @@ def prune_elements(
         if was_destructive:
             if safe_exacts:
                 kept.extend(safe_exacts)
-                dropped.append({
-                    "selector": selector,
-                    "reason": "narrowed to exact matches that do not contain content",
-                    "safe": safe_exacts,
-                })
+                narrowed.append(selector)
+                for e in safe_exacts:
+                    narrow_source[e] = selector
             else:
                 dropped.append({"selector": selector, "reason": "removes the page content"})
         else:
             kept.append(selector)
 
-    kept = _integrity_pass(samples, kept, min_text, dropped)
+    final_kept, integrity_dropped = _integrity_pass(samples, kept, min_text)
 
-    seen: set[str] = set()
-    final_kept: list[str] = []
-    for sel in kept:
-        if sel not in seen:
-            seen.add(sel)
-            final_kept.append(sel)
+    # Reconcile the report so nothing is listed as kept that did not survive the
+    # integrity pass, and nothing is both "kept" and separately "dropped".
+    final_kept = _dedupe(final_kept)
+    final_dropped: list[dict] = []
+    for entry in dropped:
+        if entry["selector"] not in {d["selector"] for d in final_dropped}:
+            final_dropped.append(entry)
+
+    for broad in narrowed:
+        kept_here = [s for s in final_kept if narrow_source.get(s) == broad]
+        if kept_here:
+            final_dropped.append({
+                "selector": broad,
+                "reason": "narrowed to exact matches that do not contain content",
+                "kept": kept_here,
+            })
+        else:
+            final_dropped.append({"selector": broad, "reason": "removes the page content"})
+
+    for sel in integrity_dropped:
+        # selectors dropped by integrity that came from a narrow are already
+        # reflected in that narrow's final "kept" list -- report them once.
+        if sel in narrow_source:
+            continue
+        if not any(d["selector"] == sel for d in final_dropped):
+            final_dropped.append({"selector": sel, "reason": "dropped so content survives the page"})
 
     return {
         "kept": final_kept,
-        "dropped": dropped,
-        "counts": {"kept": len(final_kept), "dropped": len(dropped)},
+        "dropped": final_dropped,
+        "counts": {"kept": len(final_kept), "dropped": len(final_dropped)},
     }
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for sel in items:
+        if sel not in seen:
+            seen.add(sel)
+            out.append(sel)
+    return out
 
 
 def _integrity_pass(
     htmls: Sequence[str],
     kept: list[str],
     min_text: int,
-    dropped: list[dict],
-) -> list[str]:
-    """Iteratively trim selectors that, combined, strip a page below the floor."""
+) -> tuple[list[str], list[str]]:
+    """Trim selectors that, combined, strip a page below the floor.
+
+    Returns (surviving selectors, selectors removed by the pass).
+    """
     working = list(kept)
+    removed: list[str] = []
     for html in htmls:
         if not working:
             break
@@ -241,9 +279,8 @@ def _integrity_pass(
             if not widow:
                 break
             working.remove(widow)
-            if not any(d["selector"] == widow for d in dropped):
-                dropped.append({"selector": widow, "reason": "dropped so content survives the page"})
-    return working
+            removed.append(widow)
+    return working, removed
 
 
 def _max_widower(html: str, selectors: list[str]):

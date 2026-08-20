@@ -66,7 +66,7 @@ def test_narrows_broad_selector_when_content_lives_in_section():
     assert "nav" in kept
 
     narrowed = next(d for d in result["dropped"] if d["selector"] == '[id^="shopify-section-"]')
-    assert "#shopify-section-main" not in narrowed.get("safe", [])
+    assert "#shopify-section-main" not in narrowed.get("kept", [])
 
 
 def test_keeps_broad_selector_when_content_is_outside_sections():
@@ -116,3 +116,44 @@ def test_is_content_container_refuses_mainlike_selectors():
         assert is_content_container(sel) is True
     for sel in ["nav", "header", "footer", "#sidebar", "[id^='shopify-section-']"]:
         assert is_content_container(sel) is False
+
+
+def _two_content_sections_html():
+    """Two sections carry content: a single-section deletion still leaves text,
+    so the narrow step deems each individually safe -- the integrity pass must
+    then reconcile the report to avoid 'kept then dropped' contradictions."""
+    long_a = "content section A text. " * 300
+    long_b = "content section B text. " * 300
+    return f"""
+    <body>
+      <div id="shopify-section-header">Header nav</div>
+      <div id="shopify-section-main-a">{long_a}</div>
+      <div id="shopify-section-main-b">{long_b}</div>
+      <footer>footer</footer>
+    </body>
+    """
+
+
+def test_report_is_reconciled_after_integrity_pass():
+    html = _two_content_sections_html()
+    result = prune_elements([html], ['[id^="shopify-section-"]'])
+
+    kept = set(result["kept"])
+    broad_entries = [d for d in result["dropped"] if d["selector"] == '[id^="shopify-section-"]']
+    assert len(broad_entries) == 1  # reported exactly once
+    entry = broad_entries[0]
+
+    # nothing is advertised as "kept" that did not survive the integrity pass
+    for sel in entry.get("kept", []):
+        assert sel in kept
+    # no selector is both "kept" and separately listed as a dropped entry
+    for d in result["dropped"]:
+        assert d["selector"] not in kept
+    # content survives once the final kept list is applied
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    for sel in result["kept"]:
+        for el in soup.select(sel):
+            el.decompose()
+    assert len(soup.get_text("", strip=True)) >= 500
