@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+docker-compose.override.yml
+configs/*.json
+configs/.write-test
+.pytest_cache/
+*.egg-info/
+smoke_app.py
+_dbg.py
+_dbg2.py

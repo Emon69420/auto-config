@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  scraper-config-generator:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - GENAI_API_KEY=${GENAI_API_KEY}
+      - FLASK_INTERNAL_API_KEY=${FLASK_INTERNAL_API_KEY}
+      - SCRAPER_CONFIG_DIR=${SCRAPER_CONFIG_DIR:-/app/configs}
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    volumes:
+      - ./configs:/app/configs
+    restart: unless-stopped
