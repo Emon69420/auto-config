@@ -19,7 +19,8 @@ This service fixes all three by:
 1. **Rendering with a real browser first** (Playwright/Chromium) so analysis sees
    the true DOM, not a JS-framework shell.
 2. **Validating before saving** — it tests the config on sample pages, requiring
-   boilerplate to actually be removed while main content survives (score ≥ 0.8).
+   boilerplate to actually be removed while main content survives (score ≥ 0.8),
+   and auto-prunes any selector that would strip the content.
 3. **Auto-healing** broken selectors at runtime via `POST /heal`.
 
 ## Pipeline
@@ -74,8 +75,9 @@ curl -X POST http://localhost:8000/generate \
   -d '{"url":"https://www.siddhivinayakhospitals.org","persist":true}'
 ```
 
-- `persist: true` writes `configs/<host>.json`; a config that fails validation is
-  **not** written (400).
+- `persist: true` writes `configs/<host>.json`. Destructive selectors are
+  auto-pruned by the content guard before writing; if validation still degrades
+  the content-safe config is written anyway and flagged `degraded: true`.
 - Optional fields: `sample_pages` (default 10), `ai_refine` (default true),
   `limit` (default 5; `null` = full crawl).
 

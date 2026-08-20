@@ -12,11 +12,11 @@ from typing import Any
 
 from app.config import defaults as d
 from app.config.settings import Settings, get_settings
-from app.services import persistence
+from app.services import content_guard, persistence
 from app.services.analyzer import SelectorAnalyzer
 from app.services.async_util import run_async
 from app.services.discovery import SiteDiscovery
-from app.services.exceptions import ConfigError, ValidationFailed
+from app.services.exceptions import ConfigError
 from app.services.llm_compiler import LLMCompiler
 from app.services.renderer import PageRenderer
 from app.services.validator import ConfigValidator
@@ -188,6 +188,23 @@ def generate(
             limit=limit,
         )
 
+        # 5b. content guard: enforce "never remove the content" on the rendered
+        # DOM, dropping / narrowing any selector that would strip a page's text.
+        # This is the mechanism that generalizes to arbitrary site layouts.
+        guard = content_guard.prune_elements(
+            [r.get("html") or "" for r in rendered if r.get("html")],
+            config["elementsToRemove"],
+        )
+        config["elementsToRemove"] = guard["kept"]
+        warnings = [
+            (
+                {"selector": d["selector"], "reason": d["reason"]}
+                if "safe" not in d
+                else {"selector": d["selector"], "reason": d["reason"], "kept": d["safe"]}
+            )
+            for d in guard["dropped"]
+        ]
+
         # 6. validate
         test_urls = [page["url"] for page in rendered][: settings.validation_max_pages]
         validation = run_async(validator.validate_config(config, test_urls))
@@ -198,6 +215,7 @@ def generate(
 
     # 7. confidence + result
     confidence, label = compute_confidence(platforms, validation["validation_score"])
+    degraded = not validation["passed"]
 
     result: dict[str, Any] = {
         "host": host,
@@ -206,11 +224,14 @@ def generate(
         "confidence": confidence,
         "confidence_label": label,
         "platforms": platforms,
+        "degraded": degraded,
+        "warnings": warnings,
+        "pruned": guard["counts"],
     }
 
+    # Best-effort: write the content-safe config even when validation degrades,
+    # and report why. A hard failure is reserved for sites we cannot render.
     if persist:
-        if not validation["passed"]:
-            raise ValidationFailed(validation)
         written = persistence.write_config(
             config,
             config_dir=config_dir,

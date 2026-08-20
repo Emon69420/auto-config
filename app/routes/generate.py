@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from app.models.config import GenerateRequest
 from app.routes.auth import get_current_settings, require_api_key
 from app.services import generator_service
-from app.services.exceptions import ConfigError, RenderingError, ValidationFailed
+from app.services.exceptions import ConfigError, RenderingError
 
 bp = Blueprint("generate", __name__)
 
@@ -40,7 +40,5 @@ def generate_config():
         return jsonify({"error": str(exc)}), 400
     except RenderingError as exc:
         return jsonify({"error": str(exc)}), 502
-    except ValidationFailed as exc:
-        return jsonify({"error": str(exc), "validation": exc.report}), 400
 
     return jsonify(result), 200

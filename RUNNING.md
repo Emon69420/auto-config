@@ -120,14 +120,21 @@ Request fields (all optional except `url`):
 }
 ```
 
-**400 — validation failed, config NOT saved:**
+**Content guard (auto-trims destructive selectors):** before validation, the
+service checks every candidate `elementsToRemove` against the rendered pages and
+enforces a universal rule — *never remove the content*. Any selector that would
+strip a page's text is **dropped or narrowed** to the exact non-content matches
+(e.g. the Shopify catch-all `[id^="shopify-section-"]` becomes
+`#shopify-section-header`, `#shopify-section-footer`, … and the content-bearing
+section is excluded). This is what lets a brand-new site succeed on the first
+try instead of failing a layout-specific edge case. The response's `pruned` and
+`warnings` fields say what was changed.
 
-```json
-{ "error": "Validation failed: score 0.75 < 0.8", "validation": { "passed": false, "validation_score": 0.75, "details": [ ... ] } }
-```
-
-This is the safety gate: if removing the selectors would strip the answerable
-content, the config is rejected rather than written.
+**If validation still degrades** (site renders but the remaining config scores
+below threshold), the service does **not** 400: it writes the best-effort,
+content-safe config and returns it with `"degraded": true` plus `warnings`. A
+hard **400** is reserved for malformed requests, and **502** for sites that
+cannot be rendered at all.
 
 **502 — rendering failed** (site unreachable / browser error). **400 — malformed request.**
 

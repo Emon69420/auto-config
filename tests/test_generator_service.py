@@ -71,7 +71,10 @@ def test_generate_raises_on_unreachable_host(settings):
         generator_service.generate("not a url", settings=settings)
 
 
-def test_generate_refuses_to_persist_failed_validation(monkeypatch, settings):
+def test_generate_persists_pruned_config_when_validation_degrades(monkeypatch, settings, tmp_path):
+    """Validation may degrade below threshold, but the content-safe config is still
+    written (best-effort) with a flag, instead of a hard 400/raise."""
+
     async def failing_validate(self, config, test_urls):
         return {"passed": False, "validation_score": 0.4, "details": []}
 
@@ -88,10 +91,16 @@ def test_generate_refuses_to_persist_failed_validation(monkeypatch, settings):
         lambda prompt, json_mode=False: "{}",
     )
 
-    import pytest
-    from app.services.exceptions import ValidationFailed
-    with pytest.raises(ValidationFailed):
-        generator_service.generate(
-            "https://example.com", persist=True, settings=settings
-        )
+    config_dir = str(tmp_path / "out" / "configs")
+    import pathlib
+    pathlib.Path(config_dir).mkdir(parents=True, exist_ok=True)
+
+    result = generator_service.generate(
+        "https://example.com", persist=True, settings=settings, config_dir=config_dir
+    )
     close_loop()
+
+    assert result["degraded"] is True
+    assert result["validation"]["passed"] is False
+    import os
+    assert os.path.exists(config_dir + "/example.com.json")
