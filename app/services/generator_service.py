@@ -196,14 +196,12 @@ def generate(
             config["elementsToRemove"],
         )
         config["elementsToRemove"] = guard["kept"]
-        warnings = [
-            (
-                {"selector": d["selector"], "reason": d["reason"]}
-                if "safe" not in d
-                else {"selector": d["selector"], "reason": d["reason"], "kept": d["safe"]}
-            )
-            for d in guard["dropped"]
-        ]
+        warnings = []
+        for d in guard["dropped"]:
+            entry = {"selector": d["selector"], "reason": d["reason"]}
+            if d.get("kept"):
+                entry["kept"] = d["kept"]
+            warnings.append(entry)
 
         # 6. validate
         test_urls = [page["url"] for page in rendered][: settings.validation_max_pages]

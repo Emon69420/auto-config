@@ -104,3 +104,42 @@ def test_generate_persists_pruned_config_when_validation_degrades(monkeypatch, s
     assert result["validation"]["passed"] is False
     import os
     assert os.path.exists(config_dir + "/example.com.json")
+
+
+def test_generate_warnings_carry_narrowed_kept_list(monkeypatch, settings):
+    """The warnings surfaced on the response include the guard's narrowed
+    exact selectors (guard emits 'kept', response must not drop it)."""
+    import app.services.generator_service as gs
+    from app.services import content_guard
+
+    fake_guard = {
+        "kept": ["#shopify-section-header", "#shopify-section-footer"],
+        "dropped": [
+            {
+                "selector": '[id^="shopify-section-"]',
+                "reason": "narrowed to exact matches that do not contain content",
+                "kept": ["#shopify-section-header", "#shopify-section-footer"],
+            }
+        ],
+        "counts": {"kept": 2, "dropped": 1},
+    }
+    monkeypatch.setattr(content_guard, "prune_elements", lambda *a, **k: fake_guard)
+    monkeypatch.setattr(
+        "app.services.discovery.SiteDiscovery.get_diverse_urls",
+        lambda self, n=None: ["https://example.com/a"],
+    )
+    monkeypatch.setattr("app.services.renderer.PageRenderer.render_batch", _fake_render_batch("fake"))
+    monkeypatch.setattr(
+        "app.services.validator.ConfigValidator.validate_config", _fake_validate()
+    )
+    monkeypatch.setattr(
+        "app.services.llm_client.llm_complete",
+        lambda prompt, json_mode=False: json.dumps({"elementsToRemove": [".nav"], "pathsToSkip": []}),
+    )
+
+    result = gs.generate("https://example.com", persist=False, settings=settings)
+    close_loop()
+
+    assert result["warnings"][0]["selector"] == '[id^="shopify-section-"]'
+    assert result["warnings"][0]["kept"] == ["#shopify-section-header", "#shopify-section-footer"]
+    assert result["config"]["elementsToRemove"] == ["#shopify-section-header", "#shopify-section-footer"]
