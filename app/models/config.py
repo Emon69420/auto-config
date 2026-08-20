@@ -26,7 +26,7 @@ class ScraperConfig(BaseModel):
     websiteUrl: str
     seedUrls: list[str] = Field(default_factory=list)
     pathsToSkip: list[str] = Field(default_factory=list)
-    scrapeWithGemini: bool = False
+    scrapeWithGemini: bool = True
     limit: Optional[int] = None
     puppeteerOnly: bool = True
     requestsPerMinute: int = 500

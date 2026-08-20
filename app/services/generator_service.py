@@ -87,7 +87,7 @@ def compose_config(
         "websiteUrl": origin,
         "seedUrls": seeds,
         "pathsToSkip": paths_to_skip,
-        "scrapeWithGemini": False,
+        "scrapeWithGemini": True,
         "limit": limit,
         "puppeteerOnly": True,
         "requestsPerMinute": 500,
