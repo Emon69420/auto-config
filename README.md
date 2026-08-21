@@ -68,34 +68,233 @@ All POST routes require the header `x-api-key: <FLASK_INTERNAL_API_KEY>`.
 
 ### `POST /generate`
 
+Generate a per‑site scraper config for the given hostname. The endpoint **always returns JSON**; Node handles persistence.
+
+**Request body** (`application/json`):
+
+| Parameter | Type | Default / Required | Description |
+|-----------|------|-------------------|-------------|
+| `hostUrl` | `string` | **required** | Target hostname, e.g. `"quitci.com"` or `"www.quitci.com"`. Matched against config file names (lowercased, `www.` stripped/kept per hostname rules). |
+| `sample_pages` | `int` | `10` (1–20) | Number of diverse pages to discover and analyze. |
+| `ai_refine` | `bool` | `true` | Whether to run the LLM compiler for per‑site selector refinement. |
+| `limit` | `int` or `null` | `5` | Max pages to crawl (`null` = full crawl). |
+| `overrides` | `object` | `{}` | Per‑host overrides merged into the config (same shape as a standalone config file: `pathsToSkip`, `scrapeWithGemini`, `limit`, `puppeteerOnly`, `requestsPerMinute`, etc.). |
+| Any additional keys | — | Passed through | Forwarded into the emitted config dict. The schema allows extra keys (`extra="allow"`). |
+
+**Typical calls:**
+
 ```bash
+# Minimal — generate and return full response
 curl -X POST http://localhost:8000/generate \
   -H "x-api-key: $FLASK_INTERNAL_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"url":"https://www.siddhivinayakhospitals.org","persist":true}'
+  -d '{"hostUrl":"quitci.com"}'
+
+# With custom sample pages and limit
+curl -X POST http://localhost:8000/generate \
+  -H "x-api-key: $FLASK_INTERNAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"hostUrl":"quitci.com","sample_pages":15,"limit":10}'
+
+# With overrides (e.g. custom paths to skip)
+curl -X POST http://localhost:8000/generate \
+  -H "x-api-key: $FLASK_INTERNAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"hostUrl":"quitci.com","overrides":{"pathsToSkip":["/cart","/account"]}}'
 ```
 
-- `persist: true` writes `configs/<host>.json`. Destructive selectors are
-  auto-pruned by the content guard before writing; if validation still degrades
-  the content-safe config is written anyway and flagged `degraded: true`.
-- Optional fields: `sample_pages` (default 10), `ai_refine` (default true),
-  `limit` (default 5; `null` = full crawl).
+**Response (200 OK)** — complete pipeline result:
 
-**200** → `{host, filename, path, config, validation}` where `config` carries
-`confidenceScore` and `metadata`.
+```json
+{
+  "host": "quitci.com",
+  "config": {
+    "websiteUrl": "quitci.com",
+    "seedUrls": ["https://quitci.com/", "https://quitci.com/blog"],
+    "pathsToSkip": ["/cart", "/login", "/wp-admin"],
+    "scrapeWithGemini": true,
+    "limit": 5,
+    "puppeteerOnly": true,
+    "requestsPerMinute": 500,
+    "elementsToRemove": ["header", "footer", "nav", ".cookie-banner"],
+    "geminiModel": "gemini-2.5-flash",
+    "stripImages": true,
+    "stripScripts": true,
+    "stripStyles": true,
+    "stripLinks": true,
+    "stripMeta": true,
+    "stripHead": true,
+    "stripNoscript": true,
+    "stripSvg": true,
+    "confidenceScore": 0.84,
+    "metadata": {
+      "platforms": ["shopify"],
+      "confidence": 0.84,
+      "confidence_label": "high",
+      "validation_score": 1.0
+    }
+  },
+  "validation": {
+    "passed": true,
+    "validation_score": 1.0,
+    "details": [
+      {
+        "url": "https://quitci.com/",
+        "reduction_pct": 42.3,
+        "main_content_length": 15230,
+        "passed": true
+      },
+      {
+        "url": "https://quitci.com/products/foo",
+        "reduction_pct": 38.7,
+        "main_content_length": 8921,
+        "passed": true
+      }
+    ]
+  },
+  "confidence": 0.84,
+  "confidence_label": "high",
+  "platforms": ["shopify"],
+  "degraded": false,
+  "warnings": [
+    {
+      "selector": "main",
+      "reason": "refused: content container",
+      "kept": ["main#content", "div.main-content"]
+    }
+  ],
+  "pruned": {
+    "kept": 12,
+    "dropped": 3,
+    "refused": 2,
+    "narrowed": 1
+  }
+}
+```
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `host` | `string` | Normalized hostname. |
+| `config` | `object` | Full `ScraperConfig` (see schema below). |
+| `validation` | `object` | ValidationReport with `passed`, `validation_score`, and per‑URL `details` (`url`, `reduction_pct`, `main_content_length`, `passed`). |
+| `confidence` | `float` | Combined confidence score (0.0–1.0) from platform detection + validation. |
+| `confidence_label` | `string` | `"high"` (≥0.8), `"medium"` (≥0.6), `"low"` (<0.6). |
+| `platforms` | `list[str]` | Detected platforms (e.g. `["shopify"]`, `["wordpress","elementor"]`). |
+| `degraded` | `bool` | `true` when validation failed but a content‑safe config was still produced. |
+| `warnings` | `list[object]` | Content‑guard drops/refusals: each has `selector`, `reason`, and optional `kept` (narrowed replacements). |
+| `pruned` | `object` | Counts: `kept`, `dropped`, `refused`, `narrowed` from the guard pass. |
+
+**ScraperConfig schema (inside `config`):**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `websiteUrl` | `string` | — | Normalized origin. |
+| `seedUrls` | `list[str]` | `[]` | Seed URLs to crawl. |
+| `pathsToSkip` | `list[str]` | `[]` | Paths to skip. |
+| `scrapeWithGemini` | `bool` | `true` | Enable LLM clean step in production scraper. |
+| `limit` | `int` or `null` | `null` | Max pages to crawl. |
+| `puppeteerOnly` | `bool` | `true` | Force Playwright/Chromium. |
+| `requestsPerMinute` | `int` | `500` | Rate limit for Node scraper. |
+| `elementsToRemove` | `list[str]` | `[]` | CSS selectors to strip (post‑guard). |
+| `geminiModel` | `string` | `gemini-2.5-flash` | Model for LLM clean. |
+| `stripImages` / `stripScripts` / `stripStyles` / `stripLinks` / `stripMeta` / `stripHead` / `stripNoscript` / `stripSvg` | `bool` | `true` | Strip flags from `d.STRIP_FLAGS`. |
+| `confidenceScore` | `float` | `0.0` | Confidence score. |
+| `metadata` | `object` | `{}` | Platform, confidence, validation_score, etc. |
+
+---
 
 ### `POST /validate`
 
-Validate an existing config against URLs. **200** when it passes, **400** when not.
+Validate an existing config against a set of test URLs.
+
+**Request body:**
+
+```json
+{
+  "config": { /* full ScraperConfig object */ },
+  "test_urls": ["https://quitci.com/", "https://quitci.com/blog"]
+}
+```
+
+**Response (200 if passed, 400 if failed):**
+
+```json
+{
+  "passed": true,
+  "validation_score": 1.0,
+  "details": [
+    {
+      "url": "https://quitci.com/",
+      "reduction_pct": 42.3,
+      "main_content_length": 15230,
+      "passed": true
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `passed` | `bool` | Overall pass/fail (≥ threshold). |
+| `validation_score` | `float` | Fraction of pages passing (0.0–1.0). |
+| `details` | `list[object]` | Per‑URL results: `url`, `reduction_pct`, `main_content_length`, `passed`. |
+
+---
 
 ### `POST /heal`
 
-Repair a broken selector. Body: `{url, broken_selector, field_name}` →
-`{old, new, success}`.
+Repair a broken selector by rendering the live page, asking the LLM for a replacement, and verifying it matches the DOM.
 
-### `GET /health` · `GET /metrics`
+**Request body:**
 
-Health of Playwright/LLM/disk, and Prometheus metrics.
+```json
+{
+  "url": "https://quitci.com/products/foo",
+  "broken_selector": ".old-class",
+  "field_name": "elementsToRemove"
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "old": ".old-class",
+  "new": "[data-testid='product-card']",
+  "success": true
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `old` | `string` | Original broken selector. |
+| `new` | `string` | Proposed replacement (equals `old` if no safe replacement found). |
+| `success` | `bool` | `true` if replacement verified against live DOM. |
+
+---
+
+### `GET /health`
+
+Liveness/readiness probe. Returns JSON with Playwright, LLM, and disk status.
+
+**Response (200):**
+
+```json
+{
+  "status": "ok",
+  "playwright": "ok",
+  "llm": "ok",
+  "disk": "ok"
+}
+```
+
+---
+
+### `GET /metrics`
+
+Prometheus metrics endpoint (text/plain). Exposes request latency, error counts, validation scores, etc.
 
 ## Tests
 
